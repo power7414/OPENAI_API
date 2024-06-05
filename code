@@ -1,0 +1,191 @@
+import { fetch } from 'wix-fetch';
+import { getSecret } from 'wix-secrets-backend';
+
+// 取得 API 請求所需的標頭
+function getHeaders(apiKey) {
+    return {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+        'OpenAI-Beta': 'assistants=v2' // 確認這個標頭是否適用於你的情況
+    }
+}
+
+// 定義助理的 ID
+const ASSISTANT_ID = "asst_9xckhCBKCmfsU7VTZ342NCiD";
+
+// 建立新的對話執行緒
+export async function createThread() {
+    const endpoint = "https://api.openai.com/v1/threads";
+    const apiKey = await getSecret("OPENAI_API");
+    const options = {
+        method: "POST",
+        headers: getHeaders(apiKey),
+        body: JSON.stringify({})
+    }
+    const response = await fetch(endpoint, options);
+    return await response.json();
+}
+
+// 列出特定對話執行緒中的所有訊息
+export async function listMessages(threadId) {
+    const endpoint = `https://api.openai.com/v1/threads/${threadId}/messages`;
+    const apiKey = await getSecret("OPENAI_API");
+    const options = {
+        method: "GET",
+        headers: getHeaders(apiKey)
+    };
+
+    const response = await fetch(endpoint, options);
+    const data = await response.json();
+    
+    // 只提取每個訊息的角色和文本內容
+    const messages = data.data.map(message => {
+        return {
+            role: message.role,
+            content: message.content.find(c => c.type === "text").text.value // 假設存在 'text' 類型
+        };
+    });
+    return data;
+}
+
+// 在特定對話執行緒中創建訊息
+export async function createMessage(threadId, content) {
+    const endpoint = `https://api.openai.com/v1/threads/${threadId}/messages`;
+    const apiKey = await getSecret("OPENAI_API");
+    const options = {
+        method: "POST",
+        headers: getHeaders(apiKey),
+        body: JSON.stringify({ role: 'user', content })
+    }
+
+    const response = await fetch(endpoint, options);
+    return await response.json();
+}
+
+// 執行助理的任務
+export async function runAssistant(threadId) {
+    const endpoint = `https://api.openai.com/v1/threads/${threadId}/runs`;
+    const apiKey = await getSecret("OPENAI_API");
+    const options = {
+        method: "POST",
+        headers: getHeaders(apiKey),
+        body: JSON.stringify({ assistant_id: ASSISTANT_ID })
+    }
+    
+    const response = await fetch(endpoint, options);
+    return await response.json();
+    
+}
+
+// 檢索特定執行任務的狀態
+export async function retrieveRun(threadId, runId) {
+    const endpoint = `https://api.openai.com/v1/threads/${threadId}/runs/${runId}`;
+    const apiKey = await getSecret("OPENAI_API");
+    const options = {
+        method: "GET",
+        headers: getHeaders(apiKey)
+    }
+
+    const response = await fetch(endpoint, options);
+    return await response.json();
+}
+
+// 提交工具的輸出結果給 OpenAI
+export async function submitToolOutputs(threadId, runId, toolsOutput) {
+    const endpoint = `https://api.openai.com/v1/threads/${threadId}/runs/${runId}/submit_tool_outputs`;
+    const apiKey = await getSecret("OPENAI_API");  // 從 Wix Secrets 安全地獲取 API 密鑰
+    const headers = getHeaders(apiKey);  // 使用 getHeaders 函數準備標頭
+
+    const body = JSON.stringify({
+        tool_outputs: toolsOutput
+    });
+
+    try {
+        const response = await fetch(endpoint, {
+            method: 'POST',
+            headers: headers,
+            body: body
+        });
+
+        if (!response.ok) {
+            const errorResponse = await response.json();
+            throw new Error(`Error from OpenAI: ${errorResponse.error.message}`);
+        }
+        return await response.json(); // 返回來自 OpenAI 的 JSON 響應
+    } catch (error) {
+        console.error('Failed to submit tool outputs:', error);
+        throw error; // 如果需要，重新拋出錯誤以在其他地方處理
+    }
+}
+
+// 創建並輪詢執行任務
+export async function createAndPollRun(threadId) {
+    try {
+        const run = await runAssistant(threadId);
+        console.log("Run initiated:", run);
+        let runId = run.id;
+        let status = run.status;
+        let timeout = 0;
+
+        while (status !== 'completed' && status !== 'failed' && timeout < 30) {
+            timeout++;
+
+            await delay(3000);  // 等待後再次檢查狀態
+            const runUpdate = await retrieveRun(threadId, runId);
+            status = runUpdate.status;
+            console.log("Status:", status);
+        } 
+
+        if (status === 'failed') {
+            console.error("Run failed:", run);
+            // 處理特定的失敗情況
+        } 
+        return runId;
+    } catch (error) {
+        console.error("Error during run:", error);
+        throw new Error('Failed to complete run');
+    }
+}
+
+// 延遲函數，用於輪詢等待
+const delay = (ms) => new Promise ((resolve, reject) => setTimeout ( () => {
+    resolve();
+}, ms))
+
+// 冗餘函數示例，與上面 submitToolOutputs 函數類似
+export async function submitToolOutputsok(threadId, runId, toolsOutput) {
+    const endpoint = `https://api.openai.com/v1/threads/${threadId}/runs/${runId}/submit_tool_outputs`;
+    const apiKey = await getSecret("OPENAI_API");
+    const options = {
+        method: "POST",
+        headers: getHeaders(apiKey)
+    }
+    
+    const headers = {
+        "Authorization": `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+        "OpenAI-Beta": "assistants=v2"
+    };
+
+    const body = JSON.stringify({
+        tool_outputs: toolsOutput
+    });
+
+    try {
+        const response = await fetch(endpoint, {
+            method: 'POST',
+            headers: headers,
+            body: body
+        });
+
+        if (response.ok) {
+            return await response.json(); // 成功的 OpenAI 響應
+        } else {
+            const errorResponse = await response.json();
+            throw new Error(`Error from OpenAI: ${errorResponse.error.message}`);
+        }
+    } catch (error) {
+        console.error('Failed to submit tool outputs:', error);
+        throw error; // 如果需要，重新拋出錯誤以進一步處理
+    }
+}
